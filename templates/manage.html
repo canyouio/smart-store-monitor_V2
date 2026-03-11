@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>订单管理 - Vue版</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        .search-card { background: #f8fbff; border: 1px solid #cce5ff; border-radius: 12px; }
+        .order-card { transition: transform 0.2s; }
+        .order-card:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.08); }
+        [v-cloak] { display: none; }
+    </style>
+</head>
+<body class="bg-light">
+    <div id="app" v-cloak>
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+            <div class="container-fluid px-4">
+                <a class="navbar-brand" href="/">🏪 智慧门店 Vue版</a>
+                <div class="collapse navbar-collapse">
+                    <ul class="navbar-nav me-auto">
+                        <li class="nav-item"><a class="nav-link" href="/">📊 监控大屏</a></li>
+                        <li class="nav-item"><a class="nav-link active" href="/manage">📝 订单管理</a></li>
+                    </ul>
+                    <span class="navbar-text me-3">欢迎, [[ username ]]</span>
+                    <a href="/logout" class="btn btn-outline-light btn-sm">退出</a>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container mt-4 pb-5">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h3 class="fw-bold">📝 订单数据管理</h3>
+                <button class="btn btn-success" @click="openAddModal">+ 新增订单</button>
+            </div>
+
+            <div class="card search-card shadow-sm mb-4">
+                <div class="card-body row g-3">
+                    <div class="col-md-3">
+                        <select v-model="filters.category" class="form-select">
+                            <option value="">全部品类</option>
+                            <option v-for="c in categories" :value="c">[[ c ]]</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2"><input type="number" v-model="filters.min_amount" class="form-control" placeholder="最小￥"></div>
+                    <div class="col-md-2"><input type="number" v-model="filters.max_amount" class="form-control" placeholder="最大￥"></div>
+                    <div class="col-md-5">
+                        <button class="btn btn-primary px-4 me-2" @click="fetchOrders(1)">🔍 查询</button>
+                        <button class="btn btn-outline-secondary" @click="resetFilters">重置</button>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="!loading" class="mb-3 text-muted">
+                找到 <strong class="text-primary">[[ totalRecords ]]</strong> 条结果，当前第 [[ currentPage ]] / [[ totalPages ]] 页
+            </div>
+
+            <div v-if="loading" class="text-center py-5">
+                <div class="spinner-border text-primary"></div>
+                <p class="mt-2 text-secondary">同步数据中...</p>
+            </div>
+
+            <div v-else class="row">
+                <div v-for="order in orders" :key="order.id" class="col-12 mb-2">
+                    <div class="card order-card border-0 shadow-sm">
+                        <div class="card-body d-flex justify-content-between align-items-center py-2">
+                            <div>
+                                <span class="badge bg-primary me-3">[[ order.category ]]</span>
+                                <strong class="text-danger me-4">¥ [[ parseFloat(order.amount).toFixed(2) ]]</strong>
+                                <small class="text-secondary">[[ order.timestamp ]]</small>
+                            </div>
+                            <div>
+                                <button @click="openEditModal(order)" class="btn btn-sm btn-outline-warning me-1">编辑</button>
+                                <button @click="deleteOrder(order.id)" class="btn btn-sm btn-outline-danger">删除</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div v-if="orders.length === 0" class="col-12 text-center py-5">
+                    <div class="alert alert-warning d-inline-block px-5 shadow-sm">暂无匹配的订单数据</div>
+                </div>
+            </div>
+
+            <!-- 💡 修复重点：智能折叠分页组件 -->
+            <nav v-if="totalPages > 1" class="mt-4">
+                <ul class="pagination justify-content-center">
+                    <li class="page-item" :class="{disabled: currentPage === 1}">
+                        <button class="page-link" @click="fetchOrders(currentPage - 1)">上一页</button>
+                    </li>
+                    
+                    <!-- 循环渲染智能计算出的页码 -->
+                    <li v-for="(p, index) in visiblePages" :key="index" class="page-item" :class="{active: p === currentPage, disabled: p === '...'}">
+                        <button class="page-link" @click="p !== '...' && fetchOrders(p)">[[ p ]]</button>
+                    </li>
+                    
+                    <li class="page-item" :class="{disabled: currentPage === totalPages}">
+                        <button class="page-link" @click="fetchOrders(currentPage + 1)">下一页</button>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- 模态框 -->
+        <div class="modal fade" id="orderModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header border-0 pb-0"><h5 class="modal-title fw-bold">[[ isEdit ? '修改订单' : '新增订单' ]]</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                    <div class="modal-body">
+                        <div class="mb-3"><label class="form-label fw-bold">商品品类</label>
+                            <select v-model="form.category" class="form-select"><option v-for="c in categories" :value="c">[[ c ]]</option></select>
+                        </div>
+                        <div class="mb-3"><label class="form-label fw-bold">金额 (￥)</label>
+                            <input type="number" step="0.01" v-model="form.amount" class="form-control">
+                        </div>
+                    </div>
+                    <div class="modal-footer border-0 pt-0">
+                        <button @click="submitForm" class="btn w-100" :class="isEdit ? 'btn-warning' : 'btn-success'">[[ isEdit ? '保存修改' : '确认入库' ]]</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 💡 引入了 computed (计算属性)
+        const { createApp, ref, reactive, onMounted, computed } = Vue;
+        
+        createApp({
+            delimiters: ['[[', ']]'],
+            setup() {
+                const username = ref("{{ username }}" || "Admin");
+                const orders = ref([]), totalRecords = ref(0), totalPages = ref(0), currentPage = ref(1), loading = ref(false);
+                const categories = ['鲜食便当', '碳酸饮料', '休闲零食', '乳制品', '日用百货'];
+                const filters = reactive({ category: '', min_amount: '', max_amount: '' });
+                const form = reactive({ id: null, category: '鲜食便当', amount: '' });
+                const isEdit = ref(false);
+                let modalObj = null;
+
+                // 💡 智能分页逻辑：计算应该显示哪些页码，多余的用 '...' 代替
+                const visiblePages = computed(() => {
+                    const total = totalPages.value;
+                    const current = currentPage.value;
+                    
+                    if (total <= 7) {
+                        return Array.from({ length: total }, (_, i) => i + 1);
+                    }
+                    if (current <= 4) {
+                        return [1, 2, 3, 4, 5, '...', total];
+                    }
+                    if (current >= total - 3) {
+                        return [1, '...', total - 4, total - 3, total - 2, total - 1, total];
+                    }
+                    return [1, '...', current - 1, current, current + 1, '...', total];
+                });
+
+                const fetchOrders = async (page = 1) => {
+                    loading.value = true;
+                    currentPage.value = page;
+                    const params = new URLSearchParams({ page, ...filters });
+                    
+                    // 💡 修复：自动适配预览环境和本地环境的相对路径
+                    let apiUrl = `/api/orders?${params}`;
+                    if (window.location.protocol === 'blob:') {
+                        console.warn("检测到处于预览环境，将尝试使用全路径");
+                        apiUrl = `http://127.0.0.1:5000/api/orders?${params}`;
+                    }
+
+                    try {
+                        const res = await fetch(apiUrl);
+                        if (!res.ok) throw new Error("Network response was not ok");
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        orders.value = data.orders || [];
+                        totalRecords.value = data.total_records || 0;
+                        totalPages.value = data.total_pages || 0;
+                    } catch (e) {
+                        console.error("加载失败", e);
+                        // 💡 在预览环境下提供降级模拟数据以供测试
+                        if (window.location.protocol === 'blob:') {
+                            orders.value = [
+                                {id: 888, category: '测试数据', amount: 99.9, timestamp: '2026-03-11'}
+                            ];
+                            totalRecords.value = 1;
+                            totalPages.value = 1;
+                        }
+                    }
+                    finally { loading.value = false; }
+                };
+
+                const resetFilters = () => { Object.assign(filters, {category:'', min_amount:'', max_amount:''}); fetchOrders(1); };
+                const openAddModal = () => { isEdit.value = false; form.id = null; form.amount = ''; modalObj.show(); };
+                const openEditModal = (o) => { isEdit.value = true; Object.assign(form, o); modalObj.show(); };
+                const submitForm = async () => {
+                    const fd = new URLSearchParams(form);
+                    
+                    let apiUrl = isEdit.value ? '/api/order/update' : '/api/order/add';
+                    if (window.location.protocol === 'blob:') {
+                        apiUrl = `http://127.0.0.1:5000${apiUrl}`;
+                    }
+
+                    try {
+                        const res = await fetch(apiUrl, { method: 'POST', body: fd });
+                        if(res.ok) { modalObj.hide(); fetchOrders(currentPage.value); }
+                    } catch (e) { console.error("提交失败:", e); }
+                };
+                const deleteOrder = async (id) => { 
+                    if(confirm("确定删除吗?")) { 
+                        let apiUrl = `/api/order/delete/${id}`;
+                        if (window.location.protocol === 'blob:') apiUrl = `http://127.0.0.1:5000${apiUrl}`;
+                        try {
+                            await fetch(apiUrl); fetchOrders(currentPage.value); 
+                        } catch (e) { console.error("删除失败:", e); }
+                    }
+                };
+
+                onMounted(() => {
+                    const el = document.getElementById('orderModal');
+                    if (el) modalObj = new bootstrap.Modal(el);
+                    fetchOrders();
+                });
+
+                // 确保导出了 visiblePages
+                return { 
+                    username, orders, totalRecords, totalPages, currentPage, loading, categories, filters, form, isEdit, 
+                    visiblePages,  // 暴露出给 HTML 使用
+                    fetchOrders, resetFilters, openAddModal, openEditModal, submitForm, deleteOrder 
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
